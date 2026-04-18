@@ -1,0 +1,105 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x3F, 16, 2);
+
+const int ledPin = 9;
+const int potPin = A0;
+const int modeBtn = A1;
+const int upBtn = A2;
+const int downBtn = A3;
+
+int mode = 0; 
+int setHH = 0, setMM = 0;
+int cursorTrack = 0; 
+unsigned long timerMillis = 0;
+long remainingSeconds = 0;
+
+void setup() {
+  pinMode(ledPin, OUTPUT);
+  pinMode(modeBtn, INPUT_PULLUP); // Button အတွက် Internal Pull-up
+  pinMode(upBtn, INPUT_PULLUP);
+  pinMode(downBtn, INPUT_PULLUP);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.print("System Testing");
+  delay(1000);
+  lcd.clear();
+}
+
+void loop() {
+  // Mode ပြောင်းလဲမှုကို စစ်ဆေးခြင်း
+  if (digitalRead(modeBtn) == LOW) {
+    delay(200); // Debounce
+    mode++;
+    if (mode > 2) mode = 0;
+    lcd.clear();
+    while(digitalRead(modeBtn) == LOW); // လက်လွှတ်မှ ဆက်သွားမယ်
+  }
+
+  if (mode == 0) {
+    // --- MANUAL MODE ---
+    int potValue = analogRead(potPin);
+    int brightness = map(potValue, 0, 1023, 0, 255);
+    int percent = map(brightness, 0, 255, 0, 100);
+    
+    analogWrite(ledPin, brightness);
+    lcd.setCursor(0, 0);
+    lcd.print("MODE: MANUAL    ");
+    lcd.setCursor(0, 1);
+    lcd.print("BRIGHT: ");
+    lcd.print(percent);
+    lcd.print("%    ");
+  } 
+  else if (mode == 1) {
+    // --- TIMER SETTING MODE ---
+    lcd.setCursor(0, 0);
+    lcd.print("SET TIMER: ");
+    lcd.print(cursorTrack == 0 ? "HH" : "MM");
+
+    lcd.setCursor(0, 1);
+    if(setHH < 10) lcd.print("0"); lcd.print(setHH);
+    lcd.print(":");
+    if(setMM < 10) lcd.print("0"); lcd.print(setMM);
+    lcd.print(" (UP/SEL)");
+
+    if (digitalRead(upBtn) == LOW) {
+      delay(200);
+      if (cursorTrack == 0) { setHH++; if(setHH > 23) setHH = 0; }
+      else { setMM++; if(setMM > 59) setMM = 0; }
+    }
+
+    if (digitalRead(downBtn) == LOW) {
+      delay(200);
+      cursorTrack = !cursorTrack; // HH နဲ့ MM ကို switch လုပ်မယ်
+    }
+  } 
+  else if (mode == 2) {
+    // --- TIMER RUNNING ---
+    if (remainingSeconds == 0 && (setHH > 0 || setMM > 0)) {
+       remainingSeconds = (setHH * 3600L) + (setMM * 60L);
+    }
+
+    if (millis() - timerMillis >= 1000) {
+      timerMillis = millis();
+      if (remainingSeconds > 0) {
+        remainingSeconds--;
+        analogWrite(ledPin, 255); // Timer မှာ မီးလင်းထားမယ်
+      } else {
+        analogWrite(ledPin, 0); // အချိန်ပြည့်ရင် ပိတ်မယ်
+        mode = 0;
+      }
+    }
+
+    lcd.setCursor(0, 0);
+    lcd.print("TIMER RUNNING...");
+    lcd.setCursor(0, 1);
+    long h = remainingSeconds / 3600;
+    long m = (remainingSeconds % 3600) / 60;
+    long s = remainingSeconds % 60;
+    if(h<10) lcd.print("0"); lcd.print(h); lcd.print(":");
+    if(m<10) lcd.print("0"); lcd.print(m); lcd.print(":");
+    if(s<10) lcd.print("0"); lcd.print(s);
+  }
+}
