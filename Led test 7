@@ -10,7 +10,7 @@
 #pragma config BOREN = OFF           // Brown Out Reset OFF
 #pragma config IESO = OFF            // Internal External Switchover OFF
 #pragma config FCMEN = OFF           // Fail-Safe Clock Monitor OFF
-#pragma config LVP = OFF             // Low Voltage Programming OFF (ပြဿနာရှာတတ်သဖြင့် မဖြစ်မနေ ပိတ်ရမည်)
+#pragma config LVP = OFF             // Low Voltage Programming OFF (မဖြစ်မနေ ပိတ်ရမည်)
 
 #define _XTAL_FREQ 4000000 // 4MHz
 
@@ -33,18 +33,18 @@ void setup(void);
 void update_system_outputs(void);
 void display_process(void);
 
-// Timer1 Interrupt (100ms interval)
+// Timer1 Interrupt (100ms interval) - တိကျသော ၁ မိနစ် Countdown အတွက်
 void __interrupt() isr(void) {
     if (TMR1IF) {
         TMR1H = 0x0B; TMR1L = 0xDC; // Reload for 100ms
         
         if (pwr_status && timer_minutes > 0) {
             seconds_counter++;
-            if (seconds_counter >= 600) { // 60 seconds (1 minute)
+            if (seconds_counter >= 600) { // 600 * 100ms = 60 seconds (1 minute)
                 timer_minutes--;
                 seconds_counter = 0;
                 if (timer_minutes == 0) {
-                    pwr_status = 0; // အချိန်ပြည့်လျှင် အားလုံးပိတ်
+                    pwr_status = 0; // အချိန်ပြည့်လျှင် စနစ်တစ်ခုလုံးကို ပိတ်မည်
                 }
             }
         }
@@ -56,98 +56,104 @@ void main(void) {
     setup();
     
     while(1) {
-        // 1. Power On/Off Logic
+        // 1. Power On/Off Button Logic
         if (BTN_POWER == 0) {
-            __delay_ms(40);
+            __delay_ms(40); // Debounce delay
             if (BTN_POWER == 0) {
                 pwr_status = !pwr_status;
                 if (pwr_status) {
-                    dim_level = 0;       
+                    dim_level = 0;       // Power စဖွင့်လျှင် Low level ဖြင့် စတင်မည်
                     timer_minutes = 0;   // အစပိုင်းတွင် Timer မသုံးသေးပါ (--:-- ပြရန်)
                 }
-                while(!BTN_POWER) display_process();
+                while(!BTN_POWER) display_process(); // ขလုတ်လွှတ်သည်အထိ စောင့်ရင်း Display ပြနေမည်
             }
         }
 
         if (pwr_status) {
-            // 2. Dimming Logic
+            // 2. Dimming Button Logic
             if (BTN_DIM == 0) {
                 __delay_ms(40);
                 if (BTN_DIM == 0) {
                     dim_level++;
-                    if (dim_level > 2) dim_level = 0;
+                    if (dim_level > 2) dim_level = 0; // Low -> Mid -> High ပြန်ပတ်မည်
                     while(!BTN_DIM) display_process();
                 }
             }
 
-            // 3. Timer Up Button Logic (5 mins step)
+            // 3. Timer Up Button Logic (၅ မိနစ်စီ တိုးမည်)
             if (BTN_UP == 0) {
                 __delay_ms(40);
-                if (timer_minutes < 180) timer_minutes += 5;
-                seconds_counter = 0;
+                if (timer_minutes < 180) timer_minutes += 5; // Maximum 3 နာရီ (180 မိနစ်)
+                seconds_counter = 0; // အချိန်အသစ်သတ်မှတ်လျှင် ဒုတိယကောင်တာကို Reset လုပ်မည်
                 while(!BTN_UP) display_process();
             }
 
-            // 4. Timer Down Button Logic (5 mins step)
+            // 4. Timer Down Button Logic (၅ မိနစ်စီ လျော့မည်)
             if (BTN_DOWN == 0) {
                 __delay_ms(40);
                 if (timer_minutes >= 5) timer_minutes -= 5;
                 while(!BTN_DOWN) display_process();
             }
             
-            update_system_outputs(); 
+            update_system_outputs(); // LED Lamp နှင့် Indicators များကို Update လုပ်ရန်
         } else {
+            // Power Off ဖြစ်နေချိန်တွင် အားလုံးကို ပိတ်ထားမည်
             CCPR1L = 0;
-            PORTC &= 0x07; // Indicators (RC3, RC4, RC5) အားလုံးပိတ်
+            PORTC &= 0x07; // Indicators (RC3, RC4, RC5) ကို ပိတ်ရန်
         }
 
-        display_process(); 
+        display_process(); // Multiplexing Display ကို အဆက်မပြတ် Refresh လုပ်ပေးရန်
     }
 }
 
 void setup(void) {
-    ANSEL = 0; ANSELH = 0; // All Digital I/O
+    ANSEL = 0; ANSELH = 0; // Pins အားလုံးကို Digital I/O အဖြစ် သတ်မှတ်ခြင်း
     
-    TRISA = 0x0F; // RA0-RA3 Inputs (Buttons), RA4-RA5 Outputs (Digits)
-    TRISB = 0x00; // PORTB Outputs (7-Seg Data)
-    TRISC = 0x00; // PORTC Outputs
+    TRISA = 0x0F; // RA0-RA3 Inputs (Buttons), RA4-RA5 Outputs (Digits 3,4)
+    TRISB = 0x00; // PORTB အားလုံး Outputs (7-Segment Data)
+    TRISC = 0x00; // PORTC အားလုံး Outputs (RC0,RC1=Digits 1,2 / RC2=PWM / RC3,4,5=Indicators)
     
-    PORTA = 0x00;
     PORTB = 0x00;
-    PORTC = 0x00;
+    
+    // Common Cathode စနစ်သစ်အရ ကနဦးတွင် Digit Pins အားလုံးကို HIGH (1) ပေးပြီး ပိတ်ထားမည်
+    PORTA |= 0x30; // RA4, RA5 = 1
+    PORTC |= 0x03; // RC0, RC1 = 1
     
     // PWM Configuration (CCP1 - RC2 Pin သီးသန့်)
-    T2CON = 0x04;  
-    PR2 = 255;     
-    CCP1CON = 0x0C;
+    T2CON = 0x04;  // Timer2 ON, Prescaler 1:1
+    PR2 = 255;     // PWM Frequency Period
+    CCP1CON = 0x0C;// PWM Mode Active
     
-    // Timer1 Configuration (100ms)
-    T1CON = 0x11;  
-    TMR1H = 0x0B;  
+    // Timer1 Configuration (Interrupt every 100ms)
+    T1CON = 0x11;  // Prescaler 1:2, Timer1 ON
+    TMR1H = 0x0B;  // Preload values
     TMR1L = 0xDC;
-    TMR1IE = 1; GIE = 1; PEIE = 1;
+    TMR1IE = 1;    // Enable Timer1 Interrupt
+    GIE = 1;       // Enable Global Interrupt
+    PEIE = 1;      // Enable Peripheral Interrupt
 }
 
 void update_system_outputs(void) {
-    PORTC &= 0x07; // RC3, RC4, RC5 များကို အရင်ရှင်းလင်းမည်
+    PORTC &= 0x07; // RC3, RC4, RC5 များကို အရင်ရှင်းလင်းမည် (PWM pin ကို မထိခိုက်စေရန်)
     
+    // Dimming Level အလိုက် Lamp Duty Cycle နှင့် Indicator LED ကို ဖွင့်ခြင်း
     if (dim_level == 0) { 
         CCPR1L = 50;        // Low Brightness
-        PORTC |= 0x08;      // RC3 = ON
+        PORTC |= 0x08;      // RC3 (Low Indicator) = ON
     } else if (dim_level == 1) { 
         CCPR1L = 150;       // Mid Brightness
-        PORTC |= 0x10;      // RC4 = ON
+        PORTC |= 0x10;      // RC4 (Mid Indicator) = ON
     } else { 
         CCPR1L = 255;       // High Brightness
-        PORTC |= 0x20;      // RC5 = ON
+        PORTC |= 0x20;      // RC5 (High Indicator) = ON
     }
 }
 
 void display_process(void) {
     if (!pwr_status) {
-        PORTB = 0x00;
-        PORTA &= 0xCF; // RA4, RA5 ပိတ်
-        PORTC &= 0xFC; // RC0, RC1 ပိတ်
+        PORTB = 0x00;  // Segment Layout Off
+        PORTA |= 0x30; // RA4, RA5 = 1 (Digits Off)
+        PORTC |= 0x03; // RC0, RC1 = 1 (Digits Off)
         return;
     }
 
@@ -155,21 +161,25 @@ void display_process(void) {
     int mins = timer_minutes % 60;
     int digits[4] = {hrs/10, hrs%10, mins/10, mins%10};
 
+    // Multiplexing စနစ်ဖြင့် Digit တစ်လုံးချင်းစီကို အလှည့်ကျလင်းစေခြင်း
     for(int i=0; i<4; i++) {
-        // Clear previous digit pins to avoid ghosting
-        PORTA &= 0xCF; 
-        PORTC &= 0xFC; 
+        // 1. Clear previous digits (အားလုံးကို HIGH ပေးပြီး အရင်ပိတ်ပါ)
+        PORTA |= 0x30; 
+        PORTC |= 0x03; 
 
-        // Load Segment Data
-        if (timer_minutes == 0) PORTB = 0x40; // Dash '-'
-        else PORTB = segment_code[digits[i]]; 
+        // 2. Load Segment Data (လင်းချင်သော segment များကို HIGH ပေးခြင်း)
+        if (timer_minutes == 0) {
+            PORTB = 0x40; // Timer မသုံးရသေးခင် အခြေအနေတွင် Dash '-' ပြရန်
+        } else {
+            PORTB = segment_code[digits[i]]; // နာရီနှင့်မိနစ် ဂဏန်းများပြရန်
+        }
         
-        // Turn ON specific Digit Pin
-        if(i == 0)      RC0 = 1; // Digit 1 -> RC0
-        else if(i == 1) RC1 = 1; // Digit 2 -> RC1
-        else if(i == 2) RA4 = 1; // Digit 3 -> RA4
-        else            RA5 = 1; // Digit 4 -> RA5
+        // 3. Turn ON specific Digit Pin (Active-Low စနစ်ဖြင့် '0' ချပေးခြင်း)
+        if(i == 0)      RC0 = 0; // Digit 1 -> Active (Ground)
+        else if(i == 1) RC1 = 0; // Digit 2 -> Active (Ground)
+        else if(i == 2) RA4 = 0; // Digit 3 -> Active (Ground)
+        else            RA5 = 0; // Digit 4 -> Active (Ground)
         
-        __delay_ms(1); 
+        __delay_ms(1); // Multiplexing Scan Delay
     }
 }
