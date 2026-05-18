@@ -1,105 +1,175 @@
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+#include <xc.h>
 
-LiquidCrystal_I2C lcd(0x3F, 16, 2);
+// Configuration Bits (LVP နှင့် တခြား မလိုအပ်သော bit များ အားလုံး ပိတ်ထားသည်)
+#pragma config FOSC = INTRC_NOCLKOUT // Internal Oscillator
+#pragma config WDTE = OFF            // Watchdog Timer OFF
+#pragma config PWRTE = OFF           // Power-up Timer OFF
+#pragma config MCLRE = ON            // MCLR Pin Enabled (Pin 1 ကို 5V ပေးရမည်)
+#pragma config CP = OFF              // Code Protection OFF
+#pragma config CPD = OFF             // Data Code Protection OFF
+#pragma config BOREN = OFF           // Brown Out Reset OFF
+#pragma config IESO = OFF            // Internal External Switchover OFF
+#pragma config FCMEN = OFF           // Fail-Safe Clock Monitor OFF
+#pragma config LVP = OFF             // Low Voltage Programming OFF (ပြဿနာရှာတတ်သဖြင့် မဖြစ်မနေ ပိတ်ရမည်)
 
-const int ledPin = 9;
-const int potPin = A0;
-const int modeBtn = A1;
-const int upBtn = A2;
-const int downBtn = A3;
+#define _XTAL_FREQ 4000000 // 4MHz
 
-int mode = 0; 
-int setHH = 0, setMM = 0;
-int cursorTrack = 0; 
-unsigned long timerMillis = 0;
-long remainingSeconds = 0;
+// Buttons Input Mapping
+#define BTN_POWER    RA0
+#define BTN_DIM      RA1
+#define BTN_UP       RA2
+#define BTN_DOWN     RA3
 
-void setup() {
-  pinMode(ledPin, OUTPUT);
-  pinMode(modeBtn, INPUT_PULLUP); // Button အတွက် Internal Pull-up
-  pinMode(upBtn, INPUT_PULLUP);
-  pinMode(downBtn, INPUT_PULLUP);
+// Global Variables
+volatile unsigned int timer_minutes = 0;
+volatile unsigned int seconds_counter = 0;
+unsigned char pwr_status = 0; 
+unsigned char dim_level = 0; 
 
-  lcd.init();
-  lcd.backlight();
-  lcd.print("System Testing");
-  delay(1000);
-  lcd.clear();
+// Common Cathode 7-Segment Codes (0-9)
+unsigned char segment_code[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+
+void setup(void);
+void update_system_outputs(void);
+void display_process(void);
+
+// Timer1 Interrupt (100ms interval)
+void __interrupt() isr(void) {
+    if (TMR1IF) {
+        TMR1H = 0x0B; TMR1L = 0xDC; // Reload for 100ms
+        
+        if (pwr_status && timer_minutes > 0) {
+            seconds_counter++;
+            if (seconds_counter >= 600) { // 60 seconds (1 minute)
+                timer_minutes--;
+                seconds_counter = 0;
+                if (timer_minutes == 0) {
+                    pwr_status = 0; // အချိန်ပြည့်လျှင် အားလုံးပိတ်
+                }
+            }
+        }
+        TMR1IF = 0;
+    }
 }
 
-void loop() {
-  // Mode ပြောင်းလဲမှုကို စစ်ဆေးခြင်း
-  if (digitalRead(modeBtn) == LOW) {
-    delay(200); // Debounce
-    mode++;
-    if (mode > 2) mode = 0;
-    lcd.clear();
-    while(digitalRead(modeBtn) == LOW); // လက်လွှတ်မှ ဆက်သွားမယ်
-  }
-
-  if (mode == 0) {
-    // --- MANUAL MODE ---
-    int potValue = analogRead(potPin);
-    int brightness = map(potValue, 0, 1023, 0, 255);
-    int percent = map(brightness, 0, 255, 0, 100);
+void main(void) {
+    setup();
     
-    analogWrite(ledPin, brightness);
-    lcd.setCursor(0, 0);
-    lcd.print("MODE: MANUAL    ");
-    lcd.setCursor(0, 1);
-    lcd.print("BRIGHT: ");
-    lcd.print(percent);
-    lcd.print("%    ");
-  } 
-  else if (mode == 1) {
-    // --- TIMER SETTING MODE ---
-    lcd.setCursor(0, 0);
-    lcd.print("SET TIMER: ");
-    lcd.print(cursorTrack == 0 ? "HH" : "MM");
+    while(1) {
+        // 1. Power On/Off Logic
+        if (BTN_POWER == 0) {
+            __delay_ms(40);
+            if (BTN_POWER == 0) {
+                pwr_status = !pwr_status;
+                if (pwr_status) {
+                    dim_level = 0;       
+                    timer_minutes = 0;   // အစပိုင်းတွင် Timer မသုံးသေးပါ (--:-- ပြရန်)
+                }
+                while(!BTN_POWER) display_process();
+            }
+        }
 
-    lcd.setCursor(0, 1);
-    if(setHH < 10) lcd.print("0"); lcd.print(setHH);
-    lcd.print(":");
-    if(setMM < 10) lcd.print("0"); lcd.print(setMM);
-    lcd.print(" (UP/SEL)");
+        if (pwr_status) {
+            // 2. Dimming Logic
+            if (BTN_DIM == 0) {
+                __delay_ms(40);
+                if (BTN_DIM == 0) {
+                    dim_level++;
+                    if (dim_level > 2) dim_level = 0;
+                    while(!BTN_DIM) display_process();
+                }
+            }
 
-    if (digitalRead(upBtn) == LOW) {
-      delay(200);
-      if (cursorTrack == 0) { setHH++; if(setHH > 23) setHH = 0; }
-      else { setMM++; if(setMM > 59) setMM = 0; }
+            // 3. Timer Up Button Logic (5 mins step)
+            if (BTN_UP == 0) {
+                __delay_ms(40);
+                if (timer_minutes < 180) timer_minutes += 5;
+                seconds_counter = 0;
+                while(!BTN_UP) display_process();
+            }
+
+            // 4. Timer Down Button Logic (5 mins step)
+            if (BTN_DOWN == 0) {
+                __delay_ms(40);
+                if (timer_minutes >= 5) timer_minutes -= 5;
+                while(!BTN_DOWN) display_process();
+            }
+            
+            update_system_outputs(); 
+        } else {
+            CCPR1L = 0;
+            PORTC &= 0x07; // Indicators (RC3, RC4, RC5) အားလုံးပိတ်
+        }
+
+        display_process(); 
+    }
+}
+
+void setup(void) {
+    ANSEL = 0; ANSELH = 0; // All Digital I/O
+    
+    TRISA = 0x0F; // RA0-RA3 Inputs (Buttons), RA4-RA5 Outputs (Digits)
+    TRISB = 0x00; // PORTB Outputs (7-Seg Data)
+    TRISC = 0x00; // PORTC Outputs
+    
+    PORTA = 0x00;
+    PORTB = 0x00;
+    PORTC = 0x00;
+    
+    // PWM Configuration (CCP1 - RC2 Pin သီးသန့်)
+    T2CON = 0x04;  
+    PR2 = 255;     
+    CCP1CON = 0x0C;
+    
+    // Timer1 Configuration (100ms)
+    T1CON = 0x11;  
+    TMR1H = 0x0B;  
+    TMR1L = 0xDC;
+    TMR1IE = 1; GIE = 1; PEIE = 1;
+}
+
+void update_system_outputs(void) {
+    PORTC &= 0x07; // RC3, RC4, RC5 များကို အရင်ရှင်းလင်းမည်
+    
+    if (dim_level == 0) { 
+        CCPR1L = 50;        // Low Brightness
+        PORTC |= 0x08;      // RC3 = ON
+    } else if (dim_level == 1) { 
+        CCPR1L = 150;       // Mid Brightness
+        PORTC |= 0x10;      // RC4 = ON
+    } else { 
+        CCPR1L = 255;       // High Brightness
+        PORTC |= 0x20;      // RC5 = ON
+    }
+}
+
+void display_process(void) {
+    if (!pwr_status) {
+        PORTB = 0x00;
+        PORTA &= 0xCF; // RA4, RA5 ပိတ်
+        PORTC &= 0xFC; // RC0, RC1 ပိတ်
+        return;
     }
 
-    if (digitalRead(downBtn) == LOW) {
-      delay(200);
-      cursorTrack = !cursorTrack; // HH နဲ့ MM ကို switch လုပ်မယ်
-    }
-  } 
-  else if (mode == 2) {
-    // --- TIMER RUNNING ---
-    if (remainingSeconds == 0 && (setHH > 0 || setMM > 0)) {
-       remainingSeconds = (setHH * 3600L) + (setMM * 60L);
-    }
+    int hrs = timer_minutes / 60;
+    int mins = timer_minutes % 60;
+    int digits[4] = {hrs/10, hrs%10, mins/10, mins%10};
 
-    if (millis() - timerMillis >= 1000) {
-      timerMillis = millis();
-      if (remainingSeconds > 0) {
-        remainingSeconds--;
-        analogWrite(ledPin, 255); // Timer မှာ မီးလင်းထားမယ်
-      } else {
-        analogWrite(ledPin, 0); // အချိန်ပြည့်ရင် ပိတ်မယ်
-        mode = 0;
-      }
-    }
+    for(int i=0; i<4; i++) {
+        // Clear previous digit pins to avoid ghosting
+        PORTA &= 0xCF; 
+        PORTC &= 0xFC; 
 
-    lcd.setCursor(0, 0);
-    lcd.print("TIMER RUNNING...");
-    lcd.setCursor(0, 1);
-    long h = remainingSeconds / 3600;
-    long m = (remainingSeconds % 3600) / 60;
-    long s = remainingSeconds % 60;
-    if(h<10) lcd.print("0"); lcd.print(h); lcd.print(":");
-    if(m<10) lcd.print("0"); lcd.print(m); lcd.print(":");
-    if(s<10) lcd.print("0"); lcd.print(s);
-  }
+        // Load Segment Data
+        if (timer_minutes == 0) PORTB = 0x40; // Dash '-'
+        else PORTB = segment_code[digits[i]]; 
+        
+        // Turn ON specific Digit Pin
+        if(i == 0)      RC0 = 1; // Digit 1 -> RC0
+        else if(i == 1) RC1 = 1; // Digit 2 -> RC1
+        else if(i == 2) RA4 = 1; // Digit 3 -> RA4
+        else            RA5 = 1; // Digit 4 -> RA5
+        
+        __delay_ms(1); 
+    }
 }
